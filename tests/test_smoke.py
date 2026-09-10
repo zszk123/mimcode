@@ -39,14 +39,14 @@ def test_main_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert f"mimcode {mimcode.__version__}" in capsys.readouterr().out
 
 
-def test_main_unimplemented_paths_exit_nonzero(
+def test_main_print_mode_requires_prompt(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """未实现模式统一返回非零退出码，且 stderr 有提示而非崩溃。"""
-    assert main(["-p", "你好"]) == 2
+    """print 模式空提示词：非零退出码 + stderr 提示（不装配会话）。"""
+    assert main(["-p"]) == 2
     assert main([]) == 2
     err = capsys.readouterr().err
-    assert "尚未实现" in err
+    assert "提示词" in err
 
 
 def test_parse_accepts_combined_flags() -> None:

@@ -1,30 +1,23 @@
-"""mimcode 命令行入口。
+"""mimcode 命令行入口（T14 全参数接线）。
 
-模式分发对齐 pi（src/main.ts L109-120）：TTY → interactive；
-``-p``/非 TTY → print；``--list-models``/``--help``/``--version`` 直出。
-未实现的模式统一占位提示并返回 2。
+模式分发（对齐 pi main.ts L109-120）：
+- ``--list-models``/``--version``/``--help``：直出
+- ``-p``/非 TTY：print 模式
+- TTY：interactive 模式
+- 会话 flag（-c/--fork/--session）在两种模式下语义一致
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from mimcode import __version__
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """构建 CLI 参数解析器。
-
-    参数语义对齐 pi：
-    - ``-p``           print 模式：一次性执行提示词并输出结果后退出
-    - ``-c/--continue`` 恢复当前目录最近会话
-    - ``--fork``       从最近（或 --session 指定）会话分叉新会话
-    - ``--session``    指定会话 ID（配合 -c/--fork 使用）
-    - ``--model``      指定模型（endpoint/model 或裸模型 id）
-    - ``--thinking``   思考级别（off/minimal/low/medium/high）
-    - ``--list-models`` 列出可用模型目录后退出
-    """
+    """构建 CLI 参数解析器（对齐 pi 参数语义）。"""
     parser = argparse.ArgumentParser(
         prog="mimcode",
         description="mimcode - 终端 AI 编程助手（pi 的 Python 迁移版）",
@@ -84,14 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI 主入口。
-
-    Args:
-        argv: 命令行参数列表；``None`` 时取 ``sys.argv[1:]``。
-
-    Returns:
-        进程退出码。
-    """
+    """CLI 主入口。"""
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -109,13 +95,81 @@ def main(argv: list[str] | None = None) -> int:
         list_models(registry)
         return 0
 
-    # --version 由 argparse 的 version 动作直接处理，不会执行到这里
-    if args.print_mode or args.prompt:
-        print("尚未实现：print 模式（T14 接入）", file=sys.stderr)
+    prompt = " ".join(args.prompt).strip() if args.prompt else ""
+
+    if args.print_mode or prompt or not sys.stdin.isatty():
+        # print 模式（-p / 带提示词 / 非 TTY，对齐 pi）
+        if not prompt:
+            print('print 模式需要提示词（mimcode -p "提示词"）', file=sys.stderr)
+            return 2
+        return _run_print(args, prompt)
+    return _run_interactive(args, prompt)
+
+
+def _run_print(args: argparse.Namespace, prompt: str) -> int:
+    """print 模式执行。"""
+    import asyncio
+
+    from mimcode.app.agent_session import AgentSession, AgentSessionError
+
+    cwd = str(Path.cwd())
+
+    async def _execute() -> int:
+        session = AgentSession(
+            cwd=cwd,
+            model_spec=args.model,
+            thinking_level=args.thinking,
+            continue_session=args.continue_session,
+            fork=args.fork,
+            session_id=args.session,
+        )
+        from mimcode.modes.print_mode import run_print_mode
+
+        return await run_print_mode(session, prompt)
+
+    try:
+        return asyncio.run(_execute())
+    except AgentSessionError as exc:
+        print(f"会话错误: {exc}", file=sys.stderr)
         return 2
-    if args.continue_session or args.fork or args.session:
-        print("尚未实现：会话管理（T7/T14 接入）", file=sys.stderr)
+    except ValueError as exc:
+        print(f"配置错误: {exc}", file=sys.stderr)
         return 2
 
-    print("尚未实现：交互模式（T12 接入）", file=sys.stderr)
-    return 2
+
+def _run_interactive(args: argparse.Namespace, prompt: str) -> int:
+    """interactive 模式执行。"""
+    import asyncio
+
+    from mimcode.app.agent_session import AgentSession, AgentSessionError
+    from mimcode.tui.app import InteractiveApp
+
+    cwd = str(Path.cwd())
+
+    async def _execute() -> int:
+        session = AgentSession(
+            cwd=cwd,
+            model_spec=args.model,
+            thinking_level=args.thinking,
+            continue_session=args.continue_session,
+            fork=args.fork,
+            session_id=args.session,
+        )
+        agent_context = session.build_agent_context()
+        app = InteractiveApp(
+            cwd=cwd,
+            agent_context=agent_context,
+            config_factory=lambda: session.make_loop_config(),
+            command_context_factory=session.command_context,
+        )
+        return await app.run_async()
+
+    try:
+        return asyncio.run(_execute())
+    except AgentSessionError as exc:
+        print(f"会话错误: {exc}", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"配置错误: {exc}", file=sys.stderr)
+        return 2
+    del prompt
