@@ -1,0 +1,22 @@
+# Python 构建产物
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 虚拟环境
+.venv/
+
+# 测试与工具缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 运行期生成的本地数据（会话、项目级扩展缓存）
+.mimcode/
+
+# uv.lock 为应用锁文件，纳入版本管理，不忽略
+
+# IDE
+.idea/
