@@ -1,8 +1,15 @@
-"""mimcode.types：消息、内容块、用量与事件的纯数据层。
+"""mimcode.types：消息、内容块、用量、事件与 LLM 边界契约的纯数据层。
 
 全量 re-export，业务代码统一 ``from mimcode.types import ...``。
 """
 
+from mimcode.types.context import (
+    LlmContext,
+    ModelInfo,
+    StreamOptions,
+    ThinkingLevel,
+    ToolSpec,
+)
 from mimcode.types.events import (
     AgentEnd,
     AgentEvent,
@@ -47,6 +54,12 @@ from mimcode.types.messages import (
 )
 
 __all__ = [
+    # LLM 边界契约
+    "LlmContext",
+    "ModelInfo",
+    "StreamOptions",
+    "ThinkingLevel",
+    "ToolSpec",
     # 消息与内容块
     "AgentMessage",
     "Api",
