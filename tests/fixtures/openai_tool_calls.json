@@ -1,0 +1,69 @@
+{
+  "protocol": "openai",
+  "model": "faux-gpt",
+  "error": null,
+  "chunks": [
+    {
+      "id": "chatcmpl-faux-2",
+      "model": "faux-gpt",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "index": 0,
+                "id": "call-1",
+                "type": "function",
+                "function": { "name": "bash", "arguments": "" }
+              }
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-faux-2",
+      "model": "faux-gpt",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "tool_calls": [
+              { "index": 0, "function": { "arguments": "{\"command\"" } }
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-faux-2",
+      "model": "faux-gpt",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "tool_calls": [
+              { "index": 0, "function": { "arguments": ": \"echo hi\"}" } }
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-faux-2",
+      "model": "faux-gpt",
+      "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }]
+    },
+    {
+      "id": "chatcmpl-faux-2",
+      "model": "faux-gpt",
+      "choices": [],
+      "usage": { "prompt_tokens": 12, "completion_tokens": 8 }
+    }
+  ]
+}

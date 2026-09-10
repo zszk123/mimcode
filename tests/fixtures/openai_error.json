@@ -1,0 +1,6 @@
+{
+  "protocol": "openai",
+  "model": "faux-gpt",
+  "error": "connection",
+  "chunks": []
+}

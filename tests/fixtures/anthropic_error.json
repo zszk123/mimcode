@@ -1,0 +1,6 @@
+{
+  "protocol": "anthropic",
+  "model": "faux-claude",
+  "error": "connection",
+  "chunks": []
+}

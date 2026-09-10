@@ -1,0 +1,41 @@
+{
+  "protocol": "openai",
+  "model": "faux-gpt",
+  "error": null,
+  "chunks": [
+    {
+      "id": "chatcmpl-faux-1",
+      "model": "faux-gpt",
+      "choices": [
+        {
+          "index": 0,
+          "delta": { "role": "assistant", "content": "你" },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "id": "chatcmpl-faux-1",
+      "model": "faux-gpt",
+      "choices": [
+        { "index": 0, "delta": { "content": "好" }, "finish_reason": null }
+      ]
+    },
+    {
+      "id": "chatcmpl-faux-1",
+      "model": "faux-gpt",
+      "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+    },
+    {
+      "id": "chatcmpl-faux-1",
+      "model": "faux-gpt",
+      "choices": [],
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "prompt_tokens_details": { "cached_tokens": 3 },
+        "completion_tokens_details": { "reasoning_tokens": 2 }
+      }
+    }
+  ]
+}
