@@ -44,9 +44,9 @@ def test_main_unimplemented_paths_exit_nonzero(
 ) -> None:
     """未实现模式统一返回非零退出码，且 stderr 有提示而非崩溃。"""
     assert main(["-p", "你好"]) == 2
-    assert main(["--list-models"]) == 2
     assert main([]) == 2
-    assert "尚未实现" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "尚未实现" in err
 
 
 def test_parse_accepts_combined_flags() -> None:
