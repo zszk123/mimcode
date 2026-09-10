@@ -31,7 +31,7 @@ from mimcode.app.skills import LoadSkillsResult
 from mimcode.app.skills import load_skills as load_skills_impl
 from mimcode.config import EndpointEntry
 from mimcode.core.system_prompt import build_system_prompt
-from mimcode.provider.auth import resolve_api_key
+from mimcode.provider.auth import api_key_env_name, resolve_api_key
 from mimcode.provider.catalog import default_endpoint_name
 from mimcode.provider.registry import Registry, build_registry
 from mimcode.types import AgentMessage, ModelInfo, ThinkingLevel
@@ -166,12 +166,22 @@ class AgentSession:
         )
 
     def make_loop_config(self, stream_fn: Callable | None = None) -> AgentLoopConfig:
-        """构建 loop 配置（API key 经解析链）。"""
+        """构建 loop 配置（API key 经解析链）。
+
+        Raises:
+            AgentSessionError: 端点 key 全链未解析到（首次启动引导）。
+        """
 
         endpoint = self._endpoint_entry()
         api_key = (
             resolve_api_key(endpoint, environ=_snapshot_environ()) if endpoint is not None else None
         )
+        if endpoint is not None and api_key is None:
+            env_name = api_key_env_name(endpoint)
+            raise AgentSessionError(
+                f"端点 '{self.model.provider}' 未找到 API key："
+                f"设置环境变量 {env_name}，或在 ~/.mimcode/config.toml 配置 api_key"
+            )
         return AgentLoopConfig(
             model=self.model,
             stream_fn=stream_fn or self._default_stream_fn(),

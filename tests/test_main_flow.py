@@ -26,6 +26,12 @@ from mimcode.types import UserMessage
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _faux_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """为 faux 端点补 key（装配层仅校验存在性，不校验取值）。"""
+    monkeypatch.setenv("FAUX_KEY", "faux-test-key")
+
+
 def make_faux_config(scripts: list[FauxFixture]) -> Config:
     """构造把 faux 端点声明为唯一端点的配置。"""
     return Config(
@@ -164,6 +170,14 @@ async def test_session_model_spec_and_unknown(tmp_path: Path) -> None:
 
     with pytest.raises(AgentSessionError, match="未找到模型"):
         AgentSession(cwd=str(tmp_path), home=tmp_path, model_spec="nope", user_config=config)
+
+
+async def test_first_run_no_key_guidance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """首次启动引导：无配置且默认端点 key 全链未命中时，make_loop_config 报指引。"""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    session = AgentSession(cwd=str(tmp_path), home=tmp_path, user_config=Config())
+    with pytest.raises(AgentSessionError, match="OPENAI_API_KEY"):
+        session.make_loop_config()
 
 
 async def test_session_skills_injected_into_prompt(tmp_path: Path) -> None:

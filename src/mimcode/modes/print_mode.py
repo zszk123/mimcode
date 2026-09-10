@@ -15,14 +15,14 @@ from typing import TextIO
 
 from mimcode.agent.loop import AgentEvent
 from mimcode.app.agent_session import AgentSession, run_prompt
-
-
-def _is_text_delta(event: AgentEvent) -> bool:
-    """assistant 流式正文事件判定。"""
-    if event.type != "message_update":
-        return False
-    assistant_event = event.assistant_event
-    return assistant_event.type == "text_delta"
+from mimcode.types import (
+    AssistantMessage,
+    MessageEnd,
+    MessageUpdate,
+    StreamTextDelta,
+    StreamThinkingDelta,
+    ToolExecutionStart,
+)
 
 
 async def run_print_mode(
@@ -47,29 +47,33 @@ async def run_print_mode(
         stderr.write('print 模式需要提示词（mimcode -p "提示词"）\n')
         return 2
 
+    emitted_text = False
+
     def on_event(event: AgentEvent) -> None:
-        if _is_text_delta(event):
-            stdout.write(event.assistant_event.delta)  # type: ignore[attr-defined]
-            stdout.flush()
-        elif event.type == "message_update":
+        nonlocal emitted_text
+        if isinstance(event, MessageUpdate):
             assistant_event = event.assistant_event
-            if assistant_event.type == "thinking_delta":
+            if isinstance(assistant_event, StreamTextDelta):
+                stdout.write(assistant_event.delta)
+                stdout.flush()
+                emitted_text = True
+            elif isinstance(assistant_event, StreamThinkingDelta):
                 stderr.write(".")  # 思考进度点（不泄漏内容）
                 stderr.flush()
-        elif event.type == "tool_execution_start":
+        elif isinstance(event, ToolExecutionStart):
             stderr.write(f"[工具] {event.tool_name}…\n")
-        elif event.type == "message_end" and event.message.role == "assistant":
-            # 正文定稿换行（仅当有正文输出）
-            stdout.write("\n")
+        elif isinstance(event, MessageEnd) and event.message.role == "assistant":
+            # 正文定稿换行（仅当本轮有正文输出）
+            if emitted_text:
+                stdout.write("\n")
+                emitted_text = False
 
     new_messages = await run_prompt(session, prompt, on_event=on_event)
 
     # 错误终态 → 退出码 2
     for message in new_messages:
-        if (
-            message.role == "assistant" and message.stop_reason == "error"  # type: ignore[union-attr]
-        ):
-            error_text = message.error_message or "未知错误"  # type: ignore[union-attr]
+        if isinstance(message, AssistantMessage) and message.stop_reason == "error":
+            error_text = message.error_message or "未知错误"
             stderr.write(f"错误: {error_text}\n")
             return 2
     return 0
