@@ -15,6 +15,8 @@ API key 不在注册表固化：provider 流式调用时经 StreamOptions.api_ke
 from __future__ import annotations
 
 import dataclasses
+import json
+from pathlib import Path
 
 from mimcode.config import Config, EndpointEntry, ModelEntry
 from mimcode.provider.anthropic_protocol import AnthropicProtocolProvider
@@ -54,6 +56,50 @@ def _require_protocol(endpoint_name: str, endpoint: EndpointEntry) -> Api:
     return endpoint.protocol
 
 
+def _create_faux_replay(endpoint_name: str, endpoint: EndpointEntry, faux_dir: Path) -> Provider:
+    """faux:// 端点 → 目录回放 provider（进程级 e2e 专用）。
+
+    Raises:
+        ValueError: 协议非 openai、回放脚本缺失/损坏/为空、未声明模型。
+    """
+    from mimcode.provider.faux import (
+        FIXTURES_FILENAME,
+        REQUESTS_LOG_FILENAME,
+        FauxFixture,
+        FauxReplayOpenAIProvider,
+    )
+
+    protocol = _require_protocol(endpoint_name, endpoint)
+    if protocol != "openai":
+        raise ValueError(
+            f"faux transport 仅支持 openai 协议（端点 '{endpoint_name}' 声明 '{protocol}'）"
+        )
+    fixtures_path = faux_dir / FIXTURES_FILENAME
+    if not fixtures_path.is_file():
+        raise ValueError(f"faux 回放脚本不存在: {fixtures_path}")
+    try:
+        scripts = [
+            FauxFixture.model_validate(item)
+            for item in json.loads(fixtures_path.read_text(encoding="utf-8"))
+        ]
+    except ValueError as exc:  # JSON 解析与 pydantic 校验错误
+        raise ValueError(f"faux 回放脚本不合法: {fixtures_path}: {exc}") from exc
+    if not scripts:
+        raise ValueError(f"faux 回放脚本为空: {fixtures_path}")
+    models = [
+        build_model_info(endpoint_name, endpoint, model_id) for model_id in (endpoint.models or {})
+    ]
+    if not models:
+        raise ValueError(f"faux 端点 '{endpoint_name}' 未声明模型条目")
+    return FauxReplayOpenAIProvider(
+        scripts=scripts,
+        record_path=faux_dir / REQUESTS_LOG_FILENAME,
+        provider_id=endpoint_name,
+        name=endpoint_name,
+        models=models,
+    )
+
+
 def create_provider(
     endpoint_name: str,
     endpoint: EndpointEntry,
@@ -65,6 +111,11 @@ def create_provider(
     Raises:
         ValueError: 三层合并后协议仍缺失。
     """
+    from mimcode.provider.faux import faux_dir_from_base_url
+
+    faux_dir = faux_dir_from_base_url(endpoint.base_url)
+    if faux_dir is not None:
+        return _create_faux_replay(endpoint_name, endpoint, faux_dir)
     protocol = _require_protocol(endpoint_name, endpoint)
     resolved_models = models or [
         build_model_info(endpoint_name, endpoint, model_id) for model_id in (endpoint.models or {})

@@ -35,6 +35,7 @@ packages = ["src/mimcode"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = ["e2e: 进程级端到端测试（子进程驱动，较慢）"]
 
 [tool.ruff]
 line-length = 100

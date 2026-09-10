@@ -143,6 +143,7 @@ def _run_interactive(args: argparse.Namespace, prompt: str) -> int:
 
     from mimcode.app.agent_session import AgentSession, AgentSessionError
     from mimcode.tui.app import InteractiveApp
+    from mimcode.tui.rich_presenter import RichPresenter
 
     cwd = str(Path.cwd())
 
@@ -155,13 +156,26 @@ def _run_interactive(args: argparse.Namespace, prompt: str) -> int:
             fork=args.fork,
             session_id=args.session,
         )
+
+        async def _pre_turn() -> str | None:
+            outcome = await session.maybe_compact()
+            if outcome is None:
+                return None
+            return f"已压缩上下文（~{outcome.tokens_before} tokens）"
+
         agent_context = session.build_agent_context()
         app = InteractiveApp(
             cwd=cwd,
             agent_context=agent_context,
             config_factory=lambda: session.make_loop_config(),
+            persist_events=session.persist_events,
+            pre_turn_hook=_pre_turn,
             command_context_factory=session.command_context,
+            presenter=RichPresenter(),
+            echo_user=False,
         )
+        app.state.current_model_id = session.model.id
+        app.state.session_id = session.session.session_id
         return await app.run_async()
 
     try:
@@ -172,4 +186,3 @@ def _run_interactive(args: argparse.Namespace, prompt: str) -> int:
     except ValueError as exc:
         print(f"配置错误: {exc}", file=sys.stderr)
         return 2
-    del prompt

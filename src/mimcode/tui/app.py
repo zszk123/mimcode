@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, TextIO
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.styles import Style
 
 from mimcode.agent.loop import AgentContext, AgentLoopConfig, agent_loop
 from mimcode.app.commands import (
@@ -46,6 +47,12 @@ INPUT_MAX_CHARS = 100_000
 ConfigFactory = Callable[[], AgentLoopConfig]
 """每轮 agent 的配置工厂（模型切换后重建配置）。"""
 
+PreTurnHook = Callable[[], Awaitable[str | None]]
+"""轮前钩子：发送前触发（压缩检查等），返回展示文本或 None。"""
+
+PersistSink = Callable[[list[AgentEvent]], Awaitable[int]]
+"""轮后持久化钩子（AgentSession.persist_events 形态）。"""
+
 
 class InteractiveApp:
     """交互式 REPL 应用骨架。"""
@@ -57,7 +64,10 @@ class InteractiveApp:
         agent_context: AgentContext,
         config_factory: ConfigFactory,
         command_context_factory: Callable[[], CommandContext] | None = None,
+        echo_user: bool = True,
         stream: TextIO = sys.stdout,
+        persist_events: PersistSink | None = None,
+        pre_turn_hook: PreTurnHook | None = None,
         exit_event: asyncio.Event | None = None,
         presenter: RichPresenter | None = None,
     ) -> None:
@@ -66,11 +76,13 @@ class InteractiveApp:
         self.config_factory = config_factory
         self.command_context_factory = command_context_factory
         self.state = TuiState()
-        self.pipeline = RendererPipeline(self.state)
+        self.pipeline = RendererPipeline(self.state, echo_user=echo_user)
         self.stream = stream
         # 呈现层可替换：默认行式打印；注入 RichPresenter 走高保真渲染
         self.presenter = presenter
         self._interrupt_event = asyncio.Event()
+        self._persist_events = persist_events
+        self._pre_turn_hook = pre_turn_hook
         self._exit_event = exit_event or asyncio.Event()
         self._history = InMemoryHistory()
         self.command_registry = builtin_command_registry()
@@ -89,6 +101,8 @@ class InteractiveApp:
         elif action.kind == "stream_chunk":
             print(action.text, end="", file=self.stream)
             self.stream.flush()
+        elif action.kind == "clear_stream":
+            pass  # 擦除语义仅 Rich presenter（TTY）实现
         elif action.kind == "set_busy":
             self.state.busy = True
         elif action.kind == "clear_busy":
@@ -115,17 +129,27 @@ class InteractiveApp:
     async def run_agent_turn(self, prompt: str) -> list[AgentEvent]:
         """执行一轮 agent：注入用户消息、消费事件、渲染。"""
         self._interrupt_event.clear()
-        user_message = UserMessage(content=prompt)
-        self.agent_context.messages.append(user_message)
-
+        if self._pre_turn_hook is not None:
+            notice = await self._pre_turn_hook()
+            if notice:
+                print(notice, file=self.stream)
         config = self.config_factory()
         events = agent_loop(
-            [user_message],
+            [UserMessage(content=prompt)],
             self.agent_context,
             config,
             signal=self._interrupt_event,
         )
-        return await self._consume(events)
+        consumed = await self._consume(events)
+        # agent_end 携带的新增消息回填上下文（多轮累计；
+        # loop 在副本上工作，调用方上下文不被修改）
+        for event in reversed(consumed):
+            if event.type == "agent_end":
+                self.agent_context.messages.extend(event.messages)
+                break
+        if self._persist_events is not None:
+            await self._persist_events(consumed)
+        return consumed
 
     async def interrupt(self) -> None:
         """中断当前 agent 请求。"""
@@ -197,6 +221,7 @@ class InteractiveApp:
             history=self._history,
             key_bindings=self._build_key_bindings(),
             multiline=False,
+            style=Style.from_dict({"prompt": "bold ansicyan"}),
         )
         print(
             "mimcode 交互模式（/help 查看命令，Esc 中断，Ctrl-D 退出）",
@@ -204,7 +229,7 @@ class InteractiveApp:
         )
         while not self._exit_event.is_set():
             try:
-                raw = await session.prompt_async(FormattedText([("", "> ")]))
+                raw = await session.prompt_async(FormattedText([("class:prompt", "> ")]))
             except (EOFError, KeyboardInterrupt):
                 if self.state.busy:
                     await self.interrupt()

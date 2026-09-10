@@ -472,8 +472,12 @@ class AnthropicProtocolProvider(Provider):
             "AsyncStream[RawMessageStreamEvent]",
             await client.messages.create(**payload),
         )
-        async for event in stream:
-            yield event.model_dump()
+        try:
+            async for event in stream:
+                yield event.model_dump()
+        finally:
+            await stream.close()
+            await client.close()
 
     async def stream(
         self,

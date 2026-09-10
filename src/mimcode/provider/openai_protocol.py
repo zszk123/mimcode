@@ -391,8 +391,12 @@ class OpenAIProtocolProvider(Provider):
             "AsyncStream[ChatCompletionChunk]",
             await client.chat.completions.create(**payload),
         )
-        async for chunk in stream:
-            yield chunk.model_dump()
+        try:
+            async for chunk in stream:
+                yield chunk.model_dump()
+        finally:
+            await stream.close()
+            await client.close()
 
     async def stream(
         self,

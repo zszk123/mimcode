@@ -31,6 +31,7 @@ from mimcode.types import (
     StreamTextDelta,
     StreamThinkingDelta,
     TextBlock,
+    ToolCallBlock,
     ToolExecutionEnd,
     ToolExecutionStart,
     ToolResult,
@@ -50,19 +51,35 @@ THINKING_PREVIEW_CHARS = 60
 class RenderAction:
     """一次渲染动作。"""
 
-    kind: Literal["write_line", "stream_chunk", "set_busy", "clear_busy", "footer", "error"]
+    kind: Literal[
+        "write_line",
+        "stream_chunk",
+        "set_busy",
+        "clear_busy",
+        "footer",
+        "error",
+        "clear_stream",
+    ]
     text: str = ""
     """动作文本（行内容/流式片段/错误信息）。"""
 
     style: str = "system"
     """语义角色（主题取色）：user/assistant/tool/error/thinking/system。"""
 
+    diff: str | None = None
+    """工具结果的 unified diff（edit 类工具；呈现层渲染语义色块）。"""
+
+    erasable: bool = False
+    """瞬时行（流式指示等）：定稿时随流式正文一并擦除。"""
+
 
 class RendererPipeline:
     """AgentEvent → RenderAction 的纯逻辑转换器。"""
 
-    def __init__(self, state: TuiState | None = None) -> None:
+    def __init__(self, state: TuiState | None = None, *, echo_user: bool = True) -> None:
         self.state = state or TuiState()
+        self._echo_user = echo_user
+        self._saw_first_user = False
         self._stream_buffer: list[str] = []
         self._thinking_buffer: list[str] = []
         self._thinking_block_open = False
@@ -79,6 +96,7 @@ class RendererPipeline:
         """处理一个事件，返回本次产出的动作（isinstance 窄化分发）。"""
         if isinstance(event, AgentStart):
             self.state.busy = True
+            self._saw_first_user = False
             return [RenderAction(kind="set_busy", text="运行中")]
 
         if isinstance(event, TurnStart):
@@ -91,6 +109,12 @@ class RendererPipeline:
         if isinstance(event, MessageStart):
             message = event.message
             if isinstance(message, UserMessage):
+                first = not self._saw_first_user
+                self._saw_first_user = True
+                # REPL 提示行已回显提交内容：首个用户消息不重复渲染，
+                # 其后到达的（steering 注入）仍回显
+                if first and not self._echo_user:
+                    return []
                 preview = self._user_preview(message)
                 return [RenderAction(kind="write_line", text=f"你: {preview}", style="user")]
             return []
@@ -116,8 +140,7 @@ class RendererPipeline:
 
         if isinstance(event, TurnEnd):
             self.state.turns += 1
-            footer = RenderAction(kind="footer", text=self.state.footer_line())
-            return [footer]
+            return []
 
         if isinstance(event, AgentEnd):
             self.state.busy = False
@@ -147,7 +170,8 @@ class RendererPipeline:
             return [RenderAction(kind="stream_chunk", text=assistant_event.delta)]
 
         if isinstance(assistant_event, StreamThinkingDelta):
-            delta = assistant_event.delta
+            self._thinking_buffer.append(assistant_event.delta)
+            # 折叠语义（对齐 pi）：思考原文不进入输出，仅瞬时指示行
             if not self._thinking_block_open:
                 self._thinking_block_open = True
                 return [
@@ -155,26 +179,43 @@ class RendererPipeline:
                         kind="write_line",
                         text=self._thinking_header(),
                         style="thinking",
-                    ),
-                    RenderAction(kind="stream_chunk", text=delta),
+                        erasable=True,
+                    )
                 ]
-            self._thinking_buffer.append(delta)
-            return [RenderAction(kind="stream_chunk", text=delta)]
+            return []
         return []
 
     def _thinking_header(self) -> str:
         """折叠思考区的头行。"""
-        return "  ✻ 思考中（折叠，结束可展开）"
+        return "  ✻ 思考中…"
 
     # ------------------------------------------------------------------
     # 定稿
     # ------------------------------------------------------------------
 
     def _handle_message_end(self, message: object) -> list[RenderAction]:
-        """消息定稿：assistant 产出正文行；工具结果并入工具块。"""
+        """消息定稿：擦除流式打字区 → 思考摘要 → 定稿正文（markdown 承载）。"""
         if isinstance(message, AssistantMessage):
             self._turn_assistant = message
-            actions: list[RenderAction] = []
+            # 先擦除流式区（含瞬时指示行），定稿内容在其上整体重绘
+            actions: list[RenderAction] = [RenderAction(kind="clear_stream")]
+
+            if message.stop_reason == "error":
+                partial = self._assistant_text(message) or "".join(self._stream_buffer)
+                if partial.strip():
+                    actions.append(
+                        RenderAction(kind="write_line", text=f"mim: {partial}", style="assistant")
+                    )
+                actions.append(RenderAction(kind="error", text=message.error_message or "流错误"))
+                return actions
+            if message.stop_reason == "aborted":
+                partial = self._assistant_text(message) or "".join(self._stream_buffer)
+                if partial.strip():
+                    actions.append(
+                        RenderAction(kind="write_line", text=f"mim: {partial}", style="assistant")
+                    )
+                actions.append(RenderAction(kind="write_line", text="  ✻ 已中断", style="thinking"))
+                return actions
 
             thinking_text = "".join(self._thinking_buffer)
             if self._thinking_block_open and thinking_text.strip():
@@ -184,16 +225,19 @@ class RendererPipeline:
                     RenderAction(
                         kind="write_line",
                         text=f"  ✻ 思考（{len(thinking_text)} 字符）: {preview}{suffix}",
+                        style="thinking",
                     )
                 )
 
             text = self._assistant_text(message)
+            has_tool_calls = any(isinstance(block, ToolCallBlock) for block in message.content)
             if self._stream_buffer or text:
                 body = text if text else "".join(self._stream_buffer)
                 actions.append(
                     RenderAction(kind="write_line", text=f"mim: {body}", style="assistant")
                 )
-            if not actions:
+            elif not has_tool_calls and len(actions) == 1:
+                # 真正的空回复才占位（工具调用轮的空正文不产生噪音）
                 actions.append(
                     RenderAction(kind="write_line", text="mim: (空回复)", style="assistant")
                 )
@@ -203,14 +247,19 @@ class RendererPipeline:
     def _handle_tool_end(
         self, tool_name: str, result: ToolResult, is_error: bool
     ) -> list[RenderAction]:
-        """工具结束：结果预览（错误标记）。"""
+        """工具结束：结果预览（错误标记；edit 类附 diff 块）。"""
         preview = self._tool_result_preview(result)
         prefix = "  ✗" if is_error else "  ✓"
+        diff: str | None = None
+        details = getattr(result, "details", None)
+        if isinstance(details, dict) and isinstance(details.get("diff"), str):
+            diff = details["diff"]
         return [
             RenderAction(
                 kind="write_line",
                 text=f"{prefix} {tool_name}: {preview}",
                 style="error" if is_error else "tool",
+                diff=diff,
             )
         ]
 

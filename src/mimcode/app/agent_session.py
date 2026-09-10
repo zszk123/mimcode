@@ -15,6 +15,7 @@ AgentSession 的事件→存储接线）。
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from mimcode.agent.loop import AgentContext, AgentEvent, AgentLoopConfig
@@ -35,6 +36,15 @@ from mimcode.provider.auth import api_key_env_name, resolve_api_key
 from mimcode.provider.catalog import default_endpoint_name
 from mimcode.provider.registry import Registry, build_registry
 from mimcode.types import AgentMessage, ModelInfo, ThinkingLevel
+
+
+@dataclass(frozen=True)
+class CompactOutcome:
+    """一次成功压缩的结果（UI 提示与 e2e 断言用）。"""
+
+    entry_id: str
+    tokens_before: int
+    summary: str
 
 
 class AgentSessionError(Exception):
@@ -173,9 +183,7 @@ class AgentSession:
         """
 
         endpoint = self._endpoint_entry()
-        api_key = (
-            resolve_api_key(endpoint, environ=_snapshot_environ()) if endpoint is not None else None
-        )
+        api_key = self._resolve_endpoint_key()
         if endpoint is not None and api_key is None:
             env_name = api_key_env_name(endpoint)
             raise AgentSessionError(
@@ -199,6 +207,41 @@ class AgentSession:
         if provider is None:
             raise AgentSessionError(f"端点 '{self.model.provider}' 不存在")
         return provider.stream
+
+    # ------------------------------------------------------------------
+    # 发送前压缩（对齐 pi pre-turn compaction 时机）
+    # ------------------------------------------------------------------
+
+    async def maybe_compact(self) -> CompactOutcome | None:
+        """发送前阈值检查与压缩（未触发 / 摘要失败返回 None，下次重试）。"""
+        from mimcode.app.compaction import compact_result_from_entry, compact_session
+
+        entry_id = await compact_session(
+            self.session,
+            context_window=self.model.context_window,
+            model=self.model,
+            stream_fn=self._default_stream_fn(),
+            api_key=self._resolve_endpoint_key(),
+        )
+        if entry_id is None:
+            return None
+        for entry in self.session.path_to_root():
+            if entry.id == entry_id and entry.type == "compaction":
+                result = compact_result_from_entry(entry.extra)
+                if result is not None:
+                    return CompactOutcome(
+                        entry_id=entry_id,
+                        tokens_before=result.tokens_before,
+                        summary=result.summary,
+                    )
+        return None
+
+    def _resolve_endpoint_key(self) -> str | None:
+        """当前端点的 key（压缩摘要请求用；未解析返回 None，由流层容错）。"""
+        endpoint = self._endpoint_entry()
+        if endpoint is None:
+            return None
+        return resolve_api_key(endpoint, environ=_snapshot_environ())
 
     # ------------------------------------------------------------------
     # 事件持久化（对齐 pi：agent_end 新增消息落盘）
@@ -291,6 +334,7 @@ async def run_prompt(
     from mimcode.agent.loop import agent_loop
     from mimcode.types import UserMessage
 
+    await session.maybe_compact()
     context = session.build_agent_context()
     config = session.make_loop_config()
 

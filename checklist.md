@@ -4,11 +4,11 @@
 
 ## 工程基线
 
-- [ ] `uv run mimcode --help` 退出码 0，输出含 `-p`、`--model`、`--list-models`、`-c`、`--fork` 字样
-- [ ] `uv run mimcode --version` 输出形如 `mimcode 0.x.y` 的版本号
-- [ ] `uv run pytest` 全绿且总用例数 ≥ 60
+- [x] `uv run mimcode --help` 退出码 0，输出含 `-p`、`--model`、`--list-models`、`-c`、`--fork` 字样
+- [x] `uv run mimcode --version` 输出形如 `mimcode 0.x.y` 的版本号
+- [x] `uv run pytest` 全绿且总用例数 ≥ 60
 - [ ] `rg "except Exception" src/ -U` 无「裸 Exception 捕获」（`except Exception as e` 后直接 raise/pass 的模式为 0 条）
-- [ ] 检查命令单入口存在（`scripts/check.py` 或等价物），一条命令跑 ruff + mypy + pytest
+- [x] 检查命令单入口存在（`scripts/check.py` 或等价物），一条命令跑 ruff + mypy + pytest
 - [ ] `pyproject.toml` 中 `requires-python >= 3.11`，依赖含 `openai`、`anthropic`、`prompt-toolkit`、`rich`、`pydantic`
 - [ ] 测试套件运行期间无真实网络访问：在禁网环境（或 monkeypatch 掉 SDK HTTP 层）下 `uv run pytest` 仍全绿
 
@@ -51,7 +51,7 @@
 - [ ] append-only：一 talks 中新增消息只追加行，已写入行不被改写（单测记录行数与已有行哈希后追加再比对）
 - [ ] 分叉：从含 2 条消息的会话 fork 后，新会话首 2 行与源会话逐行相等，且源会话文件未被修改
 - [ ] 发现容错：会话目录混入 1 个损坏 jsonl 与 1 个超大文件后，列表会话仍返回其余合法会话（单测构造后断言）
-- [ ] `--continue`：第一次 print 模式会话落盘后，第二次带 `-c` 启动，faux 侧收到请求的 messages 前缀包含首次会话全部消息
+- [x] `--continue`：第一次 print 模式会话落盘后，第二次带 `-c` 启动，faux 侧收到请求的 messages 前缀包含首次会话全部消息
 
 ## Compaction（T8）
 
@@ -87,11 +87,11 @@
 
 ## 端到端验收（必须全过）
 
-- [ ] **E2E-1 print 全链路**：faux transport 下 `uv run mimcode -p "测试提示" --model faux-test`，stdout 依次出现流式正文与最终完整回复，进程退出码 0
-- [ ] **E2E-2 会话续接**：接 E2E-1，再跑 `uv run mimcode -p "继续" --model faux-test -c`，faux 收到的消息序列包含上一会话的消息（断言脚本检查 faux 记录文件）
-- [ ] **E2E-3 interactive 冒烟**：headless（PTY 模拟）启动 interactive，输入一条提示，观察到助手回复渲染完成，再输入 `/exit` 正常退出，退出码 0
-- [ ] **E2E-4 compaction 路径**：构造超长会话 fixture 后以 interactive headless 打开并发送一条消息，渲染产出含压缩摘要标记
-- [ ] **E2E-5 Windows shell**：在 Windows 本机运行 E2E-1 时附带一次真实工具调用（echo），输出含工具执行块与命令输出
+- [x] **E2E-1 print 全链路**：faux transport 下 `uv run mimcode -p "测试提示" --model faux-test`，stdout 依次出现流式正文与最终完整回复，进程退出码 0
+- [x] **E2E-2 会话续接**：接 E2E-1，再跑 `uv run mimcode -p "继续" --model faux-test -c`，faux 收到的消息序列包含上一会话的消息（断言脚本检查 faux 记录文件）
+- [x] **E2E-3 interactive 冒烟**：headless（PTY 模拟）启动 interactive，输入一条提示，观察到助手回复渲染完成，再输入 `/exit` 正常退出，退出码 0
+- [x] **E2E-4 compaction 路径**：构造超长会话 fixture 后以 interactive headless 打开并发送一条消息，渲染产出含压缩摘要标记
+- [x] **E2E-5 Windows shell**：在 Windows 本机运行 E2E-1 时附带一次真实工具调用（echo），输出含工具执行块与命令输出
 
 ## 交付前终检
 

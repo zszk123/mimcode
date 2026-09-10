@@ -305,18 +305,72 @@ def test_presenter_styles_in_output() -> None:
 
 
 def test_presenter_footer_and_stream() -> None:
-    """footer 主题色行 + stream_chunk 打字机追加。"""
+    """footer 主题色行；非 TTY 流式打字区不外泄（定稿 markdown 承载）。"""
     output = io.StringIO()
     presenter = RichPresenter(stream=output, width=80)
     presenter.apply_action(RenderAction(kind="footer", text="m1 | 3 轮 | 100 tokens"))
     presenter.apply_action(RenderAction(kind="stream_chunk", text="流式"))
     presenter.apply_action(RenderAction(kind="stream_chunk", text="片段"))
+    presenter.apply_action(RenderAction(kind="clear_stream"))
+    presenter.apply_action(RenderAction(kind="write_line", text="mim: 定稿正文", style="assistant"))
     presenter.apply_action(RenderAction(kind="clear_busy"))
 
     captured = output.getvalue()
     assert "3 轮" in captured
-    assert "流式片段" in captured  # 追加无分隔
+    assert "流式片段" not in captured  # 打字区不重复输出
+    assert "定稿正文" in captured
     assert captured.endswith("\n")
+
+
+def test_presenter_stream_typewriter_and_erase_on_tty() -> None:
+    """TTY 流式：打字机追加 + clear_stream ANSI 擦除 + 跟踪复位。"""
+
+    class FakeTty(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    output = FakeTty()
+    presenter = RichPresenter(stream=output, width=80)
+    presenter.apply_action(RenderAction(kind="stream_chunk", text="打字机"))
+    assert "打字机" in output.getvalue()
+
+    presenter.apply_action(RenderAction(kind="clear_stream"))
+    captured = output.getvalue()
+    # 擦除转义：上移 + 回行首 + 清屏尾
+    assert "\x1b[" in captured
+    assert "J" in captured
+    # 跟踪复位：空区域再次 clear 不再发出转义
+    marker = len(output.getvalue())
+    presenter.apply_action(RenderAction(kind="clear_stream"))
+    assert len(output.getvalue()) == marker
+
+
+def test_presenter_erasable_line_skipped_when_not_tty() -> None:
+    """非 TTY：瞬时指示行（思考中）不进入输出。"""
+    output = io.StringIO()
+    presenter = RichPresenter(stream=output, width=80)
+    presenter.apply_action(
+        RenderAction(kind="write_line", text="  ✻ 思考中…", style="thinking", erasable=True)
+    )
+    assert "思考中" not in output.getvalue()
+
+
+def test_presenter_renders_diff_action() -> None:
+    """write_line 携带 diff：预览行 + 语义色 diff 块。"""
+    output = io.StringIO()
+    presenter = RichPresenter(stream=output, width=100)
+    presenter.apply_action(
+        RenderAction(
+            kind="write_line",
+            text="  ✓ edit: Successfully replaced 1 block(s) in a.py.",
+            style="tool",
+            diff=SAMPLE_DIFF,
+        )
+    )
+    captured = output.getvalue()
+    assert "✓ edit" in captured
+    assert "-    return 1" in captured
+    assert "+    return 2" in captured
 
 
 def test_presenter_error_action() -> None:

@@ -6,7 +6,8 @@ ruff（lint + format 检查）→ mypy（类型检查）→ pytest（单元测�
 
 用法::
 
-    uv run python scripts/check.py
+    uv run python scripts/check.py            # 全部门禁（含 e2e）
+    uv run python scripts/check.py --fast     # 跳过 e2e（pytest -m "not e2e"）
 """
 
 from __future__ import annotations
@@ -34,13 +35,21 @@ def run_step(name: str, command: list[str]) -> bool:
     return result.returncode == 0
 
 
-def main() -> int:
-    """门禁主入口：全部步骤通过返回 0，任一失败返回 1。"""
+def main(argv: list[str] | None = None) -> int:
+    """门禁主入口：全部步骤通过返回 0，任一失败返回 1。
+
+    Args:
+        argv: 命令行参数（--fast 跳过 e2e 测试）。
+    """
+    fast = "--fast" in (argv if argv is not None else sys.argv[1:])
+    pytest_command = [sys.executable, "-m", "pytest"]
+    if fast:
+        pytest_command += ["-m", "not e2e"]
     steps: list[tuple[str, list[str]]] = [
         ("ruff lint", [sys.executable, "-m", "ruff", "check", "."]),
         ("ruff format", [sys.executable, "-m", "ruff", "format", "--check", "."]),
         ("mypy", [sys.executable, "-m", "mypy"]),
-        ("pytest", [sys.executable, "-m", "pytest"]),
+        ("pytest", pytest_command),
     ]
     for name, command in steps:
         if not run_step(name, command):
@@ -51,4 +60,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

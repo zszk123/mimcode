@@ -32,6 +32,7 @@ from mimcode.types import (
     StreamTextDelta,
     StreamThinkingDelta,
     TextBlock,
+    ToolCallBlock,
     ToolExecutionEnd,
     ToolExecutionStart,
     ToolResult,
@@ -197,18 +198,20 @@ def test_pipeline_empty_assistant_renders_placeholder() -> None:
     assert any(action.text == "mim: (空回复)" for action in actions)
 
 
-def test_pipeline_footer_on_turn_end() -> None:
-    """turn_end 产出 footer 动作。"""
+def test_pipeline_footer_on_agent_end() -> None:
+    """agent_end 产出 footer 动作（轮次累计后）。"""
     state = TuiState(current_model_id="m1")
     pipeline = RendererPipeline(state)
-    actions = pipeline.handle(
+    pipeline.handle(
         TurnEnd(
             message=make_assistant(content=[]),
             tool_results=[],
         )
     )
+    actions = pipeline.handle(AgentEnd(messages=[]))
     assert actions and actions[0].kind == "footer"
     assert "m1" in actions[0].text
+    assert "1 轮" in actions[0].text
     assert state.turns == 1
 
 
@@ -467,3 +470,117 @@ async def test_app_oversized_input_rejected() -> None:
     result = await app.handle_input("x" * 200_000)
     assert result is not None and result.error is True
     assert provider.requests == []  # 未发起请求
+
+
+# ---------------------------------------------------------------------------
+# pi 样式渲染语义（T15 补充：折叠思考 / 终态 / 噪音清理 / 回显策略）
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_thinking_not_leaked_raw() -> None:
+    """思考增量不产生原文 stream_chunk（折叠，仅瞬时指示行）。"""
+    pipeline = RendererPipeline(TuiState())
+    partial = make_assistant(stop_reason="pending")
+
+    actions: list[Any] = []
+    for delta in ("第一段", "第二段"):
+        actions.extend(
+            pipeline.handle(
+                MessageUpdate(
+                    message=partial,
+                    assistant_event=StreamThinkingDelta(
+                        content_index=0, delta=delta, partial=partial
+                    ),
+                )
+            )
+        )
+    assert not any(action.kind == "stream_chunk" for action in actions)
+    assert [action.text for action in actions] == ["  ✻ 思考中…"]
+
+    # 定稿摘要：字符数 + 截断预览
+    final = pipeline.handle(MessageEnd(message=make_assistant(content=[TextBlock(text="正文")])))
+    summary = next(
+        action for action in final if action.kind == "write_line" and "思考" in action.text
+    )
+    assert "6 字符" in summary.text
+    assert "第一段" in summary.text
+
+
+def test_pipeline_tool_call_only_turn_no_placeholder() -> None:
+    """工具调用轮：空正文不产生「(空回复)」噪音。"""
+    pipeline = RendererPipeline(TuiState())
+    actions = pipeline.handle(
+        MessageEnd(
+            message=make_assistant(
+                content=[ToolCallBlock(id="c1", name="echo", arguments={"text": "x"})]
+            )
+        )
+    )
+    assert all("空回复" not in action.text for action in actions)
+    # 首个动作是流式区擦除（定稿重绘协议）
+    assert actions[0].kind == "clear_stream"
+
+
+def test_pipeline_error_terminal_renders_error_action() -> None:
+    """error 终态：部分正文保留 + error 动作（无占位行）。"""
+    pipeline = RendererPipeline(TuiState())
+    partial = make_assistant(stop_reason="pending")
+    pipeline.handle(
+        MessageUpdate(
+            message=partial,
+            assistant_event=StreamTextDelta(content_index=0, delta="部分", partial=partial),
+        )
+    )
+    actions = pipeline.handle(
+        MessageEnd(message=make_assistant(stop_reason="error", error_message="连接失败"))
+    )
+    kinds = [action.kind for action in actions]
+    assert kinds[0] == "clear_stream"
+    assert "error" in kinds
+    error_action = next(action for action in actions if action.kind == "error")
+    assert "连接失败" in error_action.text
+    body = next(action for action in actions if action.kind == "write_line")
+    assert "部分" in body.text
+
+
+def test_pipeline_aborted_terminal_renders_marker() -> None:
+    """aborted 终态：部分正文 + 已中断标记行。"""
+    pipeline = RendererPipeline(TuiState())
+    partial = make_assistant(stop_reason="pending")
+    pipeline.handle(
+        MessageUpdate(
+            message=partial,
+            assistant_event=StreamTextDelta(content_index=0, delta="写到一半", partial=partial),
+        )
+    )
+    actions = pipeline.handle(MessageEnd(message=make_assistant(stop_reason="aborted")))
+    texts = [action.text for action in actions if action.kind == "write_line"]
+    assert any("写到一半" in text for text in texts)
+    assert any("已中断" in text for text in texts)
+
+
+def test_pipeline_steering_echoed_when_user_echo_disabled() -> None:
+    """echo_user=False：首个用户消息不回显（REPL 已显示），steering 仍回显。"""
+    pipeline = RendererPipeline(TuiState(), echo_user=False)
+    pipeline.handle(AgentStart())
+    assert pipeline.handle(MessageStart(message=UserMessage(content="提示词"))) == []
+    second = pipeline.handle(MessageStart(message=UserMessage(content="补充指示")))
+    assert second and second[0].text == "你: 补充指示"
+
+
+def test_pipeline_tool_end_carries_diff() -> None:
+    """工具结果 details.diff → 动作携带 diff（呈现层渲染）。"""
+    pipeline = RendererPipeline(TuiState())
+    actions = pipeline.handle(
+        ToolExecutionEnd(
+            tool_call_id="c1",
+            tool_name="edit",
+            result=ToolResult(
+                content=[TextBlock(text="Successfully replaced 1 block(s).")],
+                details={"diff": "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n"},
+            ),
+            is_error=False,
+        )
+    )
+    assert actions[0].diff is not None
+    assert "-a" in actions[0].diff
