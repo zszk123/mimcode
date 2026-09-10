@@ -154,19 +154,65 @@ class SessionManager:
     # --- 上下文 ---
 
     def build_context(self, leaf_id: str | None = None) -> SessionContext:
-        """构建 LLM 上下文（链上消息 + 设置，对齐 pi buildSessionContext）。"""
+        """构建 LLM 上下文（链上消息 + 设置 + compaction 感知）。
+
+        compaction 语义（对齐 pi buildContextEntries）：
+        链上含 compaction 条目时，取最新一条；上下文 =
+        [摘要用户消息] + [first_kept_entry_id 起的保留尾] + [compaction 之后的消息]，
+        被摘要的前缀消息全部省略。
+        """
         chain = self.path_to_root(leaf_id)
-        messages: list[AgentMessage] = []
         settings = SessionSettings()
-        for entry in chain:
+
+        compaction_index = None
+        for index, entry in enumerate(chain):
+            if entry.type == "compaction":
+                compaction_index = index
+        if compaction_index is None:
+            messages = [
+                entry.message
+                for entry in chain
+                if entry.type == "message" and entry.message is not None
+            ]
+            self._apply_settings(chain, settings)
+            return SessionContext(messages=messages, settings=settings)
+
+        compaction = chain[compaction_index]
+        summary_text = compaction.extra.get("summary")
+        tokens_before = compaction.extra.get("tokens_before", 0)
+        first_kept_id = compaction.extra.get("first_kept_entry_id")
+
+        messages = []
+        if isinstance(summary_text, str):
+            from mimcode.app.compaction import summary_to_user_message
+
+            messages.append(
+                summary_to_user_message(
+                    summary_text, int(tokens_before) if isinstance(tokens_before, int) else 0
+                )
+            )
+        kept = False
+        for entry in chain[:compaction_index]:
+            if not kept and entry.id == first_kept_id:
+                kept = True
+            if kept and entry.type == "message" and entry.message is not None:
+                messages.append(entry.message)
+        for entry in chain[compaction_index + 1 :]:
             if entry.type == "message" and entry.message is not None:
                 messages.append(entry.message)
-            elif entry.type == "model_change":
+
+        self._apply_settings(chain, settings)
+        return SessionContext(messages=messages, settings=settings)
+
+    @staticmethod
+    def _apply_settings(chain: list, settings: SessionSettings) -> None:
+        """沿链还原设置（后值覆盖前值，对齐 pi getSessionContextSettings）。"""
+        for entry in chain:
+            if entry.type == "model_change":
                 settings.provider = entry.provider
                 settings.model_id = entry.model_id
             elif entry.type == "thinking_level_change":
                 settings.thinking_level = entry.thinking_level
-        return SessionContext(messages=messages, settings=settings)
 
     # --- 追加（append-only）---
 

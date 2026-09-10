@@ -285,6 +285,10 @@ async def test_list_sessions_tolerates_corrupt_and_oversized(tmp_path: Path) -> 
     oversized = directory / "oversized.jsonl"
     oversized.write_text('{"type":"session","id":"big"}\n' + "x" * 2000, encoding="utf-8")
 
+    import os
+
+    os.utime(good2.session_file, None)  # 让 good2 成为最近修改
+
     sessions = list_sessions(directory, max_bytes=1000)
     ids = {info.id for info in sessions}
     paths = {info.path.name for info in sessions}
