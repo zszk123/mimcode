@@ -136,14 +136,14 @@ async def test_tool_call_arguments_json_parseable() -> None:
 
 
 async def test_tool_call_partial_arguments_progressive() -> None:
-    """参数增量期间部分解析可用（null 占位），终态完整。"""
+    """参数增量期间的部分解析：键未成值时回退空对象，终态完整。"""
     provider = load("openai_tool_calls")
     model = provider.get_models()[0]
     partials: list[dict] = []
     async for event in provider.stream(model, LlmContext()):
         if event.type == "toolcall_delta":
             partials.append(event.partial.content[0].arguments)  # type: ignore[union-attr]
-    assert partials == [{}, {"command": None}, {"command": "echo hi"}]
+    assert partials == [{}, {}, {"command": "echo hi"}]
 
 
 async def test_reasoning_content_becomes_thinking_events() -> None:

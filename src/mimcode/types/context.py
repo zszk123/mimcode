@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from mimcode.types.messages import AgentMessage, Api
 
@@ -69,6 +69,8 @@ class StreamOptions(BaseModel):
     与 pi 的差异：TS 的 AbortSignal 在 Python 侧以 asyncio.Event 表达，
     置位即请求中止（provider 在 chunk 间隙检查并产出 aborted 终态）。
     """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     api_key: str | None = None
     signal: asyncio.Event | None = None

@@ -30,6 +30,7 @@ from mimcode.types import (
     AssistantMessage,
     AssistantStreamEvent,
     StreamDone,
+    StreamStart,
     StreamTextDelta,
     StreamTextEnd,
     StreamTextStart,
@@ -45,7 +46,7 @@ from mimcode.types import (
     Usage,
 )
 from mimcode.types.context import LlmContext, ModelInfo, StreamOptions, ThinkingLevel
-from mimcode.types.messages import ContentBlock, ToolResultMessage, UserMessage
+from mimcode.types.messages import ToolResultMessage, UserMessage
 
 # --- thinking 预算（对齐 pi simple-options.ts L57-62 / L55） -----------------
 
@@ -92,6 +93,12 @@ def _map_stop_reason(
     raise StreamProtocolError(f"Unhandled stop reason: {reason}")
 
 
+def _event_index(event: dict[str, Any]) -> int | None:
+    """读取事件的 index 字段（缺失或非法时返回 None）。"""
+    value = event.get("index")
+    return value if isinstance(value, int) else None
+
+
 async def translate_anthropic_events(
     events: AsyncIterator[dict[str, Any]],
     output: AssistantMessage,
@@ -114,7 +121,7 @@ async def translate_anthropic_events(
         StreamProtocolError: 流违约（零事件 / 缺 stop reason / 未知取值 / 中止）。
     """
     started = False
-    blocks_by_index: dict[int, ContentBlock] = {}
+    blocks_by_index: dict[int, TextBlock | ThinkingBlock | ToolCallBlock] = {}
     partial_json: dict[int, str] = {}
 
     async for event in events:
@@ -138,13 +145,15 @@ async def translate_anthropic_events(
             )
 
         elif event_type == "content_block_start":
-            index = event.get("index", 0)
+            start_index = _event_index(event) or 0
             block = event.get("content_block") or {}
             block_type = block.get("type")
             if block_type == "text":
-                new_block: ContentBlock = TextBlock(text=block.get("text") or "")
+                new_block: TextBlock | ThinkingBlock | ToolCallBlock = TextBlock(
+                    text=block.get("text") or ""
+                )
                 output.content.append(new_block)
-                blocks_by_index[index] = new_block
+                blocks_by_index[start_index] = new_block
                 yield StreamTextStart(content_index=len(output.content) - 1, partial=output)
             elif block_type == "thinking":
                 new_block = ThinkingBlock(
@@ -152,7 +161,7 @@ async def translate_anthropic_events(
                     thinking_signature=block.get("signature") or "",
                 )
                 output.content.append(new_block)
-                blocks_by_index[index] = new_block
+                blocks_by_index[start_index] = new_block
                 yield StreamThinkingStart(content_index=len(output.content) - 1, partial=output)
             elif block_type == "redacted_thinking":
                 new_block = ThinkingBlock(
@@ -161,7 +170,7 @@ async def translate_anthropic_events(
                     redacted=True,
                 )
                 output.content.append(new_block)
-                blocks_by_index[index] = new_block
+                blocks_by_index[start_index] = new_block
                 yield StreamThinkingStart(content_index=len(output.content) - 1, partial=output)
             elif block_type == "tool_use":
                 new_block = ToolCallBlock(
@@ -170,13 +179,15 @@ async def translate_anthropic_events(
                     arguments={},
                 )
                 output.content.append(new_block)
-                blocks_by_index[index] = new_block
-                partial_json[index] = ""
+                blocks_by_index[start_index] = new_block
+                partial_json[start_index] = ""
                 yield StreamToolCallStart(content_index=len(output.content) - 1, partial=output)
 
         elif event_type == "content_block_delta":
-            index = event.get("index")
-            block = blocks_by_index.get(index) if index is not None else None
+            index = _event_index(event)
+            if index is None:
+                continue
+            block = blocks_by_index.get(index)
             delta = event.get("delta") or {}
             delta_type = delta.get("type")
             if block is not None:
@@ -204,8 +215,10 @@ async def translate_anthropic_events(
                     )
 
         elif event_type == "content_block_stop":
-            index = event.get("index")
-            block = blocks_by_index.get(index) if index is not None else None
+            index = _event_index(event)
+            if index is None:
+                continue
+            block = blocks_by_index.get(index)
             if block is not None:
                 content_index = identity_index(output.content, block)
                 if isinstance(block, TextBlock):
@@ -216,7 +229,7 @@ async def translate_anthropic_events(
                     yield StreamThinkingEnd(
                         content_index=content_index, content=block.thinking, partial=output
                     )
-                else:
+                elif isinstance(block, ToolCallBlock):
                     block.arguments = partial_json_loads(partial_json.get(index))
                     yield StreamToolCallEnd(
                         content_index=content_index, tool_call=block, partial=output
@@ -315,7 +328,7 @@ def _convert_assistant_message(message: AssistantMessage) -> dict[str, Any] | No
                 )
             else:
                 blocks.append({"type": "text", "text": block.thinking})
-        else:
+        elif isinstance(block, ToolCallBlock):
             blocks.append(
                 {
                     "type": "tool_use",

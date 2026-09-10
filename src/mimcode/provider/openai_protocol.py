@@ -236,16 +236,20 @@ async def translate_openai_chunks(
         raise StreamProtocolError("Stream ended without any chunks")
 
     # 终结各内容块（对齐 pi 的 finishBlock 循环）
-    for block in output.content:
-        content_index = identity_index(output.content, block)
-        if isinstance(block, TextBlock):
-            yield StreamTextEnd(content_index=content_index, content=block.text, partial=output)
-        elif isinstance(block, ThinkingBlock):
-            yield StreamThinkingEnd(
-                content_index=content_index, content=block.thinking, partial=output
+    for final_block in output.content:
+        content_index = identity_index(output.content, final_block)
+        if isinstance(final_block, TextBlock):
+            yield StreamTextEnd(
+                content_index=content_index, content=final_block.text, partial=output
             )
-        else:
-            yield StreamToolCallEnd(content_index=content_index, tool_call=block, partial=output)
+        elif isinstance(final_block, ThinkingBlock):
+            yield StreamThinkingEnd(
+                content_index=content_index, content=final_block.thinking, partial=output
+            )
+        elif isinstance(final_block, ToolCallBlock):
+            yield StreamToolCallEnd(
+                content_index=content_index, tool_call=final_block, partial=output
+            )
 
     if signal is not None and signal.is_set():
         raise StreamProtocolError("Request was aborted")

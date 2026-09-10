@@ -11,9 +11,16 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from mimcode.provider.faux import FauxAnthropicProvider, FauxFixture, FauxOpenAIProvider
-from mimcode.types import AssistantStreamEvent, LlmContext, StreamError, UserMessage
+from mimcode.types import (
+    AssistantStreamEvent,
+    LlmContext,
+    StreamError,
+    StreamOptions,
+    UserMessage,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -26,14 +33,16 @@ def load_anthropic(name: str) -> FauxAnthropicProvider:
     return FauxAnthropicProvider.from_file(FIXTURES / f"{name}.json")
 
 
-async def collect_openai(provider: FauxOpenAIProvider, options=None) -> list[AssistantStreamEvent]:
+async def collect_openai(
+    provider: FauxOpenAIProvider, options: StreamOptions | None = None
+) -> list[AssistantStreamEvent]:
     model = provider.get_models()[0]
     context = LlmContext(messages=[UserMessage(content="hi")])
     return [event async for event in provider.stream(model, context, options)]
 
 
 async def collect_anthropic(
-    provider: FauxAnthropicProvider, options=None
+    provider: FauxAnthropicProvider, options: StreamOptions | None = None
 ) -> list[AssistantStreamEvent]:
     model = provider.get_models()[0]
     context = LlmContext(messages=[UserMessage(content="hi")])
@@ -69,12 +78,7 @@ async def test_openai_abort_before_first_chunk() -> None:
     provider = load_openai("openai_text")
     signal = asyncio.Event()
     signal.set()
-    events = await collect_openai(
-        provider,
-        options=__import__("mimcode.types", fromlist=["StreamOptions"]).StreamOptions(
-            signal=signal
-        ),
-    )
+    events = await collect_openai(provider, options=StreamOptions(signal=signal))
     assert len(events) == 1
     error = events[0]
     assert isinstance(error, StreamError)
@@ -87,8 +91,6 @@ async def test_anthropic_abort_before_first_chunk() -> None:
     provider = load_anthropic("anthropic_text")
     signal = asyncio.Event()
     signal.set()
-    from mimcode.types import StreamOptions
-
     events = await collect_anthropic(provider, options=StreamOptions(signal=signal))
     assert len(events) == 1
     error = events[0]
@@ -100,8 +102,6 @@ async def test_openai_abort_mid_stream() -> None:
     """流中途中止：已产出事件保留，以 aborted 终态收尾。"""
     provider = load_openai("openai_text")
     signal = asyncio.Event()
-    from mimcode.types import StreamOptions
-
     events: list[AssistantStreamEvent] = []
     async for event in provider.stream(
         provider.get_models()[0], LlmContext(), StreamOptions(signal=signal)
@@ -138,8 +138,16 @@ async def test_anthropic_missing_stop_reason() -> None:
                 "usage": {"input_tokens": 5, "output_tokens": 1},
             },
         },
-        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "hi"},
+        },
         {"type": "content_block_stop", "index": 0},
         {"type": "message_stop"},
     ]
@@ -147,9 +155,9 @@ async def test_anthropic_missing_stop_reason() -> None:
         FauxFixture(protocol="anthropic", model="faux-claude", chunks=chunks)
     )
     events = await collect_anthropic(provider)
-    assert len(events) == 1
-    error = events[0]
+    error = events[-1]
     assert isinstance(error, StreamError)
+    assert error.reason == "error"
     assert "without a stop reason" in (error.error.error_message or "")
 
 
@@ -171,9 +179,9 @@ async def test_anthropic_unknown_stop_reason() -> None:
         FauxFixture(protocol="anthropic", model="faux-claude", chunks=chunks)
     )
     events = await collect_anthropic(provider)
-    assert len(events) == 1
-    error = events[0]
+    error = events[-1]
     assert isinstance(error, StreamError)
+    assert error.reason == "error"
     assert "Unhandled stop reason: weird_new_reason" in (error.error.error_message or "")
 
 
