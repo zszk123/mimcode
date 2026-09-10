@@ -54,6 +54,9 @@ class RenderAction:
     text: str = ""
     """动作文本（行内容/流式片段/错误信息）。"""
 
+    style: str = "system"
+    """语义角色（主题取色）：user/assistant/tool/error/thinking/system。"""
+
 
 class RendererPipeline:
     """AgentEvent → RenderAction 的纯逻辑转换器。"""
@@ -89,7 +92,7 @@ class RendererPipeline:
             message = event.message
             if isinstance(message, UserMessage):
                 preview = self._user_preview(message)
-                return [RenderAction(kind="write_line", text=f"你: {preview}")]
+                return [RenderAction(kind="write_line", text=f"你: {preview}", style="user")]
             return []
 
         if isinstance(event, MessageUpdate):
@@ -100,7 +103,13 @@ class RendererPipeline:
 
         if isinstance(event, ToolExecutionStart):
             preview = self._tool_args_preview(event.tool_name, event.args)
-            return [RenderAction(kind="write_line", text=f"  ⚙ {event.tool_name}({preview})…")]
+            return [
+                RenderAction(
+                    kind="write_line",
+                    text=f"  ⚙ {event.tool_name}({preview})…",
+                    style="tool",
+                )
+            ]
 
         if isinstance(event, ToolExecutionEnd):
             return self._handle_tool_end(event.tool_name, event.result, event.is_error)
@@ -142,7 +151,11 @@ class RendererPipeline:
             if not self._thinking_block_open:
                 self._thinking_block_open = True
                 return [
-                    RenderAction(kind="write_line", text=self._thinking_header()),
+                    RenderAction(
+                        kind="write_line",
+                        text=self._thinking_header(),
+                        style="thinking",
+                    ),
                     RenderAction(kind="stream_chunk", text=delta),
                 ]
             self._thinking_buffer.append(delta)
@@ -177,9 +190,13 @@ class RendererPipeline:
             text = self._assistant_text(message)
             if self._stream_buffer or text:
                 body = text if text else "".join(self._stream_buffer)
-                actions.append(RenderAction(kind="write_line", text=f"mim: {body}"))
+                actions.append(
+                    RenderAction(kind="write_line", text=f"mim: {body}", style="assistant")
+                )
             if not actions:
-                actions.append(RenderAction(kind="write_line", text="mim: (空回复)"))
+                actions.append(
+                    RenderAction(kind="write_line", text="mim: (空回复)", style="assistant")
+                )
             return actions
         return []
 
@@ -189,7 +206,13 @@ class RendererPipeline:
         """工具结束：结果预览（错误标记）。"""
         preview = self._tool_result_preview(result)
         prefix = "  ✗" if is_error else "  ✓"
-        return [RenderAction(kind="write_line", text=f"{prefix} {tool_name}: {preview}")]
+        return [
+            RenderAction(
+                kind="write_line",
+                text=f"{prefix} {tool_name}: {preview}",
+                style="error" if is_error else "tool",
+            )
+        ]
 
     # ------------------------------------------------------------------
     # 纯文本抽取助手

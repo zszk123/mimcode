@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from collections.abc import AsyncIterator, Callable
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import FormattedText
@@ -35,6 +35,9 @@ from mimcode.app.commands import (
 )
 from mimcode.tui.renderer import RenderAction, RendererPipeline
 from mimcode.tui.state import TuiState
+
+if TYPE_CHECKING:
+    from mimcode.tui.rich_presenter import RichPresenter
 from mimcode.types import AgentEvent, UserMessage
 
 INPUT_MAX_CHARS = 100_000
@@ -56,6 +59,7 @@ class InteractiveApp:
         command_context_factory: Callable[[], CommandContext] | None = None,
         stream: TextIO = sys.stdout,
         exit_event: asyncio.Event | None = None,
+        presenter: RichPresenter | None = None,
     ) -> None:
         self.cwd = cwd
         self.agent_context = agent_context
@@ -64,6 +68,8 @@ class InteractiveApp:
         self.state = TuiState()
         self.pipeline = RendererPipeline(self.state)
         self.stream = stream
+        # 呈现层可替换：默认行式打印；注入 RichPresenter 走高保真渲染
+        self.presenter = presenter
         self._interrupt_event = asyncio.Event()
         self._exit_event = exit_event or asyncio.Event()
         self._history = InMemoryHistory()
@@ -74,7 +80,10 @@ class InteractiveApp:
     # ------------------------------------------------------------------
 
     def apply_action(self, action: RenderAction) -> None:
-        """把渲染动作写到输出流（T13 替换为 Rich 呈现）。"""
+        """把渲染动作落地（注入 presenter 时委托高保真呈现）。"""
+        if self.presenter is not None:
+            self.presenter.apply_action(action)
+            return
         if action.kind == "write_line":
             print(action.text, file=self.stream)
         elif action.kind == "stream_chunk":
